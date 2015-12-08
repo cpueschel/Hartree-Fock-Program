@@ -2,6 +2,18 @@
 Closed-shell restricted Hartree-Fock computation when given nuclear repulsion energy and one- and two-electron integrals.
 
 Uses PSI4's python front-end to obtain data for the nuclear repulsion energy and one- and two-electron integrals.
+
+Programs Steps
+  1. Obtains nuclear repulsion energy
+  2. Uses PSI4 to calculate one-electron integrals
+  3. Constructs ortogonalizing matrix
+  4. Constructs an intial density matrix
+  5. Performs the SCF iterations
+  6. Calculates the electronic energy
+  7. Transforms and diagonalizes fock matrix, constrcuts the new SCF eigenvector matrix
+  8. Forms new density matrix and tests for convergence.
+
+  
 ## Required Dependencies:
   You must have PSI4 (an open-source quantum chemsitry package)
 ##Example Case:
