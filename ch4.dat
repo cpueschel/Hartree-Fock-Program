@@ -1,0 +1,392 @@
+    -----------------------------------------------------------------------
+          PSI4: An Open-Source Ab Initio Electronic Structure Package
+                              PSI 4.0.0-beta5 Driver
+
+    J. M. Turney, A. C. Simmonett, R. M. Parrish, E. G. Hohenstein,
+    F. A. Evangelista, J. T. Fermann, B. J. Mintz, L. A. Burns, J. J. Wilke,
+    M. L. Abrams, N. J. Russ, M. L. Leininger, C. L. Janssen, E. T. Seidl,
+    W. D. Allen, H. F. Schaefer, R. A. King, E. F. Valeev, C. D. Sherrill,
+    and T. D. Crawford, WIREs Comput. Mol. Sci., (2011) (doi: 10.1002/wcms.93)
+
+                         Additional Contributions by
+    A. E. DePrince, M. Saitow, U. Bozkaya, A. Yu. Sokolov
+    -----------------------------------------------------------------------
+
+    Process ID:   3240
+    PSI4DATADIR: /usr/share/psi
+
+    Using LocalCommunicator (Number of processes = 1)
+
+    Memory level set to 256.000 MB
+
+  ==> Input File <==
+
+--------------------------------------------------------------------------
+from numpy import *
+import numpy as np
+
+def calculate_Energy(nbf,D,H,F,E_nuclear):
+	E = E_nuclear
+	for a in range(0,nbf):
+		for b in range(0,nbf):
+			E += D[a,b]*(H[a,b]+F[a,b])
+	return E
+def row_index(size_ind,p,q):
+	return p*size_ind + q
+
+def colmn_index(size_ind,p,q):
+	return p*size_ind + q
+
+def disp(matrix,size,size2):
+	for each in range(1,size):
+		row = ""
+		for each2 in range(1,size2):
+			this_string = str(matrix.get(each,each2))
+			row = row + "	"	 + this_string
+		print "|" + row + "	|"
+	print " "
+			
+def psi4_to_array(matrix):
+	n = int(matrix.rows(0))
+	array = zeros((n,n))
+	for i in range(0,n):
+		for ii in range(0,n):
+			array[i,ii] = float(matrix.get(i,ii))
+	return array
+
+def simple_scf(molecule):
+	del_E_convergence = 0.000000001
+	delE_state = False
+	#Inegral Generation
+	#Compute One-Electrion Integrals
+	mints = MintsHelper()
+	S = psi4_to_array(mints.ao_overlap())
+	T = psi4_to_array(mints.ao_potential())
+	V = psi4_to_array(mints.ao_kinetic())
+	I = psi4_to_array(mints.ao_eri())
+	H = add(T,V)
+	nbf = S.shape[0]
+
+	#Charge, Multiplicity, Number of Electrons, E_nuclear
+	charge = molecule.molecular_charge()
+	mult = molecule.multiplicity()
+	Z = 0
+	for A in range(molecule.natom()):
+		Z += molecule.Z(A)
+	ndocc = int(Z/2) - (charge/2) # the number of doubly-occupied orbitals
+	E_nuclear = molecule.nuclear_repulsion_energy()
+
+	##Construct the Orthogonalizing Matrix S-1/2 ##
+
+	#Diagonalize the Matrix U*SU=A
+	eigvals, eigvecs = np.linalg.eig(S)
+	lambda_power_test = (diag(eigvals**(-0.5)))
+	S_power = dot(eigvecs,dot(lambda_power_test,transpose(eigvecs)))
+
+
+	##Construct an inital (guess) density matrix ##
+	#From the core Fock Matrix in the orthogonalized basis via
+	F_prime_naut = dot(transpose(S_power),dot(H,S_power))
+
+	#Diagonalize the intial Fock Matrix
+	eigvals_fock, eigvecs_fock = linalg.eig(F_prime_naut)
+	c_naut_prime = zeros((nbf,nbf))
+	for i in range(0,nbf):
+		c_naut_prime[i,i] = eigvals_fock[i]
+
+	#Form the intial SCF eigenvector Matrix in Original Basis
+	c_naut = dot(S_power,c_naut_prime)
+
+	#Form the Intial Density Matrix, D
+	D = zeros((nbf,nbf))
+	for a in range(0,nbf):
+		for b in range(0,nbf):
+			for i in range(0,ndocc):
+				D[a,b] += c_naut[a,i]*c_naut[b,i]
+	###################################################################################
+	## Perform the SCF Iterations
+	###################################################################################
+
+	#For the new Fock matrix, F, from density matrix and teh two-electron integrals
+	i = 0
+	while not(delE_state):
+		#Count Iterations
+		i += 1 
+
+		F = zeros((nbf,nbf))
+		for a in range(0,nbf):
+			for b in range(0,nbf): 
+				D_calc = 0
+				for r in range(0,nbf):
+					for s in range(0,nbf):
+						D_calc += D[r,s]*(2*I[row_index(nbf,a,b),colmn_index(nbf,r,s)] - I[row_index(nbf,a,r),colmn_index(nbf,b,s)])
+				F[a,b] = H[a,b] + D_calc
+		# Calculate the Electronic Energy
+		
+		E_new = calculate_Energy(nbf,D,H,F,E_nuclear)
+		if i!=1:
+			dE = E_new - E_old	
+			print "dE = " + str(E_new - E_old) + " Energy: " + str(E_new)
+			if (abs(dE) < del_E_convergence):
+				delE_state = True
+		#Transform the Fock matrix to the orthonormal basis
+		F_prime = dot(transpose(S_power),dot(F,S_power))
+		#Diagonalize the Fock Matrix 
+		#Construc the new SCF eigenvector Matrix
+		eig,c_prime = linalg.eigh(F_prime)
+		C = np.dot(S_power,c_prime)
+		#Form the New Density Matrix
+		D = zeros((nbf,nbf))
+		for a in range(0,nbf):
+			for b in range(0,nbf):
+				for i in range(0,ndocc):
+					D[a,b] += C[a,i]*C[b,i]
+
+		#Test for Convergence of the Energy
+		E_old = E_new
+
+		E_new = calculate_Energy(nbf,D,H,F,E_nuclear)
+		dE = E_new - E_old
+		
+		print "dE = " + str(dE) + " Energy: " + str(E_new)
+		E_old = E_new
+		if (abs(dE) < del_E_convergence):
+			break
+#Formic Acid : HCOOH
+molecule mol {
+
+     C 
+
+    H 1 1.083 
+
+    H 1 1.083 2 109.471 
+
+    H 1 1.083 2 109.471 3 120.0 
+
+    H 1 1.083 2 109.471 4 120.0 
+}
+#H2O
+# molecule mol {
+# O
+# H 1 1.0
+# H 1 1.0 2 104.5
+# symmetry c1
+# }
+set {
+basis sto-3g
+}
+simple_scf(mol)
+set scf_type direct
+energy('scf')
+--------------------------------------------------------------------------
+
+*** tstart() called on Winterfell
+*** at Wed Apr 22 12:53:55 2015
+
+	There are an even number of electrons - assuming singlet.
+	Specify the multiplicity with the MULTP option in the
+	input if this is incorrect
+
+
+         ---------------------------------------------------------
+                                   SCF
+            by Justin Turney, Rob Parrish, and Andy Simmonett
+                              RHF Reference
+                        1 Threads,    256 MiB Core
+         ---------------------------------------------------------
+
+  ==> Geometry <==
+
+    Molecular point group: cs
+    Full point group: C3v
+
+    Geometry (in Angstrom), charge = 0, multiplicity = 1:
+
+       Center              X                  Y                   Z       
+    ------------   -----------------  -----------------  -----------------
+           C          0.000000000000    -0.000000741551     0.000000000000
+           H          0.000000000000     1.082999258449     0.000000000000
+           H         -0.510531791082    -0.360996809644     0.884267001033
+           H         -0.510531791082    -0.360996809644    -0.884267001033
+           H          1.021063582164    -0.360996809644     0.000000000000
+
+  Running in cs symmetry.
+
+  Nuclear repulsion =   13.522229199451864
+
+  Charge       = 0
+  Multiplicity = 1
+  Electrons    = 10
+  Nalpha       = 5
+  Nbeta        = 5
+
+  ==> Algorithm <==
+
+  SCF Algorithm Type is DIRECT.
+  DIIS enabled.
+  MOM disabled.
+  Fractional occupation disabled.
+  Guess Type is CORE.
+  Energy threshold   = 1.00e-06
+  Density threshold  = 1.00e-06
+  Integral threshold = 0.00e+00
+
+  ==> Primary Basis <==
+
+  Basis Set: STO-3G
+    Number of shells: 7
+    Number of basis function: 9
+    Number of Cartesian functions: 9
+    Spherical Harmonics?: true
+    Max angular momentum: 1
+
+  ==> Pre-Iterations <==
+
+   -------------------------------------------------------
+    Irrep   Nso     Nmo     Nalpha   Nbeta   Ndocc  Nsocc
+   -------------------------------------------------------
+     A'         7       7       0       0       0       0
+     A"         2       2       0       0       0       0
+   -------------------------------------------------------
+    Total       9       9       5       5       5       0
+   -------------------------------------------------------
+
+  Starting with a DF guess...
+
+ OEINTS: Wrapper to libmints.
+   by Justin Turney
+
+   Calculation information:
+      Number of atoms:                   5
+      Number of AO shells:               7
+      Number of SO shells:               6
+      Number of primitives:             21
+      Number of atomic orbitals:         9
+      Number of basis functions:         9
+
+      Number of irreps:                  2
+      Number of functions per irrep: [   7    2 ]
+
+      Overlap, kinetic, potential, dipole, and quadrupole integrals
+        stored in file 35.
+
+  ==> Integral Setup <==
+
+  ==> DFJK: Density-Fitted J/K Matrices <==
+
+    J tasked:                  Yes
+    K tasked:                  Yes
+    wK tasked:                  No
+    OpenMP threads:              1
+    Integrals threads:           1
+    Memory (MB):               183
+    Algorithm:                Core
+    Integral Cache:           NONE
+    Schwarz Cutoff:          1E-12
+    Fitting Condition:       1E-12
+
+   => Auxiliary Basis Set <=
+
+  Basis Set: CC-PVDZ-JKFIT
+    Number of shells: 60
+    Number of basis function: 162
+    Number of Cartesian functions: 181
+    Spherical Harmonics?: true
+    Max angular momentum: 3
+
+  Minimum eigenvalue in the overlap matrix is 2.1678619199E-01.
+  Using Symmetric Orthogonalization.
+  SCF Guess: Core (One-Electron) Hamiltonian.
+
+  ==> Iterations <==
+
+                           Total Energy        Delta E     RMS |[F,P]|
+
+   @DF-RHF iter   1:   -36.08518615759890   -3.60852e+01   2.09010e-01 
+   @DF-RHF iter   2:   -39.56743834835473   -3.48225e+00   7.15783e-02 DIIS
+   @DF-RHF iter   3:   -39.72575186426305   -1.58314e-01   6.26872e-03 DIIS
+   @DF-RHF iter   4:   -39.72685853473570   -1.10667e-03   6.52619e-04 DIIS
+   @DF-RHF iter   5:   -39.72686966510145   -1.11304e-05   9.70520e-05 DIIS
+   @DF-RHF iter   6:   -39.72686996291508   -2.97814e-07   1.11113e-06 DIIS
+   @DF-RHF iter   7:   -39.72686996294974   -3.46603e-11   1.43699e-08 DIIS
+
+  DF guess converged.
+
+  ==> Integral Setup <==
+
+  ==> DirectJK: Integral-Direct J/K Matrices <==
+
+    J tasked:                  Yes
+    K tasked:                  Yes
+    wK tasked:                  No
+    Integrals threads:           1
+    Schwarz Cutoff:          1E-12
+
+   @RHF iter   8:   -39.72686367940492    6.28354e-06   1.50240e-06 DIIS
+   @RHF iter   9:   -39.72686367948620   -8.12790e-11   3.17323e-07 DIIS
+
+  ==> Post-Iterations <==
+
+	Orbital Energies (a.u.)
+	-----------------------
+
+	Doubly Occupied:                                                      
+
+	   1A'   -11.029686     2A'    -0.912100     1A"    -0.520500  
+	   3A'    -0.520500     4A'    -0.520498  
+
+	Virtual:                                                              
+
+	   5A'     0.719230     2A"     0.719232     6A'     0.719232  
+	   7A'     0.761074  
+
+	Final Occupation by Irrep:
+	         A'    A" 
+	DOCC [     4,    1 ]
+
+  Energy converged.
+
+  @RHF Final Energy:   -39.72686367948620
+
+   => Energetics <=
+
+    Nuclear Repulsion Energy =             13.5222291994518642
+    One-Electron Energy =                 -79.4916242532468118
+    Two-Electron Energy =                  26.2425313743087543
+    DFT Exchange-Correlation Energy =       0.0000000000000000
+    Empirical Dispersion Energy =           0.0000000000000000
+    Total Energy =                        -39.7268636794862005
+
+
+
+Properties will be evaluated at   0.000000,   0.000000,   0.000000 Bohr
+  ==> Properties <==
+
+
+Properties computed using the SCF density density matrix
+  Nuclear Dipole Moment: (a.u.)
+     X:    -0.0000      Y:     0.0000      Z:     0.0000
+
+  Electronic Dipole Moment: (a.u.)
+     X:    -0.0000      Y:    -0.0000      Z:     0.0000
+
+  Dipole Moment: (a.u.)
+     X:    -0.0000      Y:     0.0000      Z:     0.0000     Total:     0.0000
+
+  Dipole Moment: (Debye)
+     X:    -0.0000      Y:     0.0000      Z:     0.0000     Total:     0.0000
+
+
+  Saving occupied orbitals to File 180.
+
+*** tstop() called on Winterfell at Wed Apr 22 12:53:55 2015
+Module time:
+	user time   =       0.50 seconds =       0.01 minutes
+	system time =       0.01 seconds =       0.00 minutes
+	total time  =          0 seconds =       0.00 minutes
+Total time:
+	user time   =       0.50 seconds =       0.01 minutes
+	system time =       0.01 seconds =       0.00 minutes
+	total time  =          0 seconds =       0.00 minutes
+
+*** PSI4 exiting successfully. Buy a developer a beer!

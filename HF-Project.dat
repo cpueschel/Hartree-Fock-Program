@@ -1,0 +1,181 @@
+from numpy import *
+import numpy as np
+
+def calculate_Energy(nbf,D,H,F,E_nuclear):
+	E = E_nuclear
+	for a in range(0,nbf):
+		for b in range(0,nbf):
+			E += D[a,b]*(H[a,b]+F[a,b])
+	return E
+def row_index(size_ind,p,q):
+	return p*size_ind + q
+
+def colmn_index(size_ind,p,q):
+	return p*size_ind + q
+
+def disp(matrix,size,size2):
+	for each in range(1,size):
+		row = ""
+		for each2 in range(1,size2):
+			this_string = str(matrix.get(each,each2))
+			row = row + "	"	 + this_string
+		print "|" + row + "	|"
+	print " "
+			
+def psi4_to_array(matrix):
+	n = int(matrix.rows(0))
+	array = zeros((n,n))
+	for i in range(0,n):
+		for ii in range(0,n):
+			array[i,ii] = float(matrix.get(i,ii))
+	return array
+
+def simple_scf(molecule):
+	del_E_convergence = 0.000000001
+	delE_state = False
+	#Inegral Generation
+	#Compute One-Electrion Integrals
+	mints = MintsHelper()
+	S = psi4_to_array(mints.ao_overlap())
+	S_s = mints.ao_overlap()
+	S_s.print_out()
+	T = psi4_to_array(mints.ao_potential())
+	V = psi4_to_array(mints.ao_kinetic())
+	I = psi4_to_array(mints.ao_eri())
+	H = add(T,V)
+	nbf = S.shape[0]
+
+	#Charge, Multiplicity, Number of Electrons, E_nuclear
+	charge = molecule.molecular_charge()
+	mult = molecule.multiplicity()
+	Z = 0
+	for A in range(molecule.natom()):
+		Z += molecule.Z(A)
+	ndocc = int(Z/2) - (charge/2) # the number of doubly-occupied orbitals
+	E_nuclear = molecule.nuclear_repulsion_energy()
+
+	##Construct the Orthogonalizing Matrix S-1/2 ##
+
+	#Diagonalize the Matrix U*SU=A
+	eigvals, eigvecs = np.linalg.eig(S)
+	lambda_power_test = (diag(eigvals**(-0.5)))
+	S_power = dot(eigvecs,dot(lambda_power_test,transpose(eigvecs)))
+
+
+	##Construct an inital (guess) density matrix ##
+	#From the core Fock Matrix in the orthogonalized basis via
+	F_prime_naut = dot(transpose(S_power),dot(H,S_power))
+
+	#Diagonalize the intial Fock Matrix
+	eigvals_fock, eigvecs_fock = linalg.eig(F_prime_naut)
+	c_naut_prime = zeros((nbf,nbf))
+	for i in range(0,nbf):
+		c_naut_prime[i,i] = eigvals_fock[i]
+
+	#Form the intial SCF eigenvector Matrix in Original Basis
+	c_naut = dot(S_power,c_naut_prime)
+
+	#Form the Intial Density Matrix, D
+	D = zeros((nbf,nbf))
+	for a in range(0,nbf):
+		for b in range(0,nbf):
+			for i in range(0,ndocc):
+				D[a,b] += c_naut[a,i]*c_naut[b,i]
+	###################################################################################
+	## Perform the SCF Iterations
+	###################################################################################
+
+	#For the new Fock matrix, F, from density matrix and teh two-electron integrals
+	i = 0
+	while not(delE_state):
+		#Count Iterations
+		i += 1 
+
+		F = zeros((nbf,nbf))
+		for a in range(0,nbf):
+			for b in range(0,nbf): 
+				D_calc = 0
+				for r in range(0,nbf):
+					for s in range(0,nbf):
+						D_calc += D[r,s]*(2*I[row_index(nbf,a,b),colmn_index(nbf,r,s)] - I[row_index(nbf,a,r),colmn_index(nbf,b,s)])
+				F[a,b] = H[a,b] + D_calc
+		# Calculate the Electronic Energy
+		
+		E_new = calculate_Energy(nbf,D,H,F,E_nuclear)
+		if i!=1:
+			dE = E_new - E_old	
+			print "dE = " + str(E_new - E_old) + " Energy: " + str(E_new)
+			if (abs(dE) < del_E_convergence):
+				delE_state = True
+		#Transform the Fock matrix to the orthonormal basis
+		F_prime = dot(transpose(S_power),dot(F,S_power))
+		#Diagonalize the Fock Matrix 
+		#Construc the new SCF eigenvector Matrix
+		eig,c_prime = linalg.eigh(F_prime)
+		C = np.dot(S_power,c_prime)
+		#Form the New Density Matrix
+		D = zeros((nbf,nbf))
+		for a in range(0,nbf):
+			for b in range(0,nbf):
+				for i in range(0,ndocc):
+					D[a,b] += C[a,i]*C[b,i]
+
+		#Test for Convergence of the Energy
+		E_old = E_new
+
+		E_new = calculate_Energy(nbf,D,H,F,E_nuclear)
+		dE = E_new - E_old
+		
+		print "dE = " + str(dE) + " Energy: " + str(E_new)
+		E_old = E_new
+		if (abs(dE) < del_E_convergence):
+			break
+# CH4
+molecule mol {
+     C 
+    H 1 1.083 
+    H 1 1.083 2 109.471 
+    H 1 1.083 2 109.471 3 120.0 
+    H 1 1.083 2 109.471 4 120.0 
+}
+#
+# molecule mol {
+# He
+# }
+
+
+# molecule mol {
+# 0   1 
+# C1 
+# C2   C1   RCC 
+# H3   C1   RCH   C2   ACCH 
+# H4   C1   RCH   C2   ACCH   H3   120. 
+# H5   C1   RCH   C2   ACCH   H3  -120. 
+# H6   C2   RCH   C1   ACCH   H3   180. 
+# H7   C2   RCH   C1   ACCH   H6   120. 
+# H8   C2   RCH   C1   ACCH   H6  -120. 
+
+# RCH = 1.5 
+# RCC = 1.1 
+# ACCH = 111.2 
+
+# }
+# molecule mol {
+#    N               0.0000    0.0000    0.0000
+#    H               0.4729    0.8190    0.3821
+#    H              -0.9457    0.0000    0.3821
+#    H               0.4729   -0.8190    0.3821
+# }
+#H2O
+# molecule mol {
+# O
+# H 1 1.0
+# H 1 1.0 2 104.5
+# symmetry c1
+# }
+set {
+basis sto-3g
+}
+simple_scf(mol)
+set scf_type direct
+energy('scf')
