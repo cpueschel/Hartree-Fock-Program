@@ -15,7 +15,7 @@ Programs Steps
 
   
 ## Required Dependencies:
-  You must have [PSI4](http://www.psicode.org/downloads.php) (an open-source quantum chemsitry package)
+  You must have [PSI4](http://www.psicode.org/downloads.php) (an open-source quantum chemistry package)
 ##Example Case:
 An example case was provided for CH4 where, the result is shown below:
 ***
